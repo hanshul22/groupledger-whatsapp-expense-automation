@@ -1,0 +1,28 @@
+{
+  "name": "groupledger",
+  "version": "1.0.0",
+  "description": "Phase 1 - WhatsApp connectivity foundation for the WhatsApp Wedding Expense Automation System",
+  "main": "src/index.js",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "6.7.23",
+    "chrono-node": "2.10.1",
+    "dotenv": "16.4.5",
+    "express": "4.22.2",
+    "googleapis": "173.0.0",
+    "ioredis": "6.0.0",
+    "pino": "9.4.0",
+    "qrcode-terminal": "0.12.0",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "fast-check": "4.9.0"
+  }
+}
