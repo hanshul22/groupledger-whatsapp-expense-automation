@@ -199,13 +199,14 @@ or, with the queue off:
 ```
 
 The `keepalive` block (also returned, more simply, by `GET /keepalive` itself)
-tells you whether the cron ping (Render's own `cron` service from
-`render.yaml`, or an external pinger) is actually reaching this process —
-`pingCount` increments once per ping and `lastPingAt` is the most recent
-one. If `lastPingAt` is more than ~15 minutes old while the service is
-otherwise reachable, the cron job itself is the thing to check (see
-render.yaml's `groupledger-keepalive` service and its run history in the
-Render dashboard), not the bot.
+tells you whether the external keepalive pinger (cron-job.org,
+UptimeRobot, a scheduled GitHub Action, etc. — see README.md "Deploying
+to Render"; Render's own Cron Job service type isn't available on the
+free plan) is actually reaching this process — `pingCount` increments
+once per ping and `lastPingAt` is the most recent one. If `lastPingAt` is
+more than ~15 minutes old while the service is otherwise reachable, the
+external pinger's own dashboard/run history is the thing to check, not
+the bot.
 
 Useful for wiring an external uptime monitor (e.g. the same
 cron-job.org ping already used for `/keepalive`, or a separate one

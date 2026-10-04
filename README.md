@@ -109,51 +109,52 @@ pm2 start ecosystem.config.js
 
 Render's free-tier web services have no persistent disk and spin down
 after ~15 minutes with no inbound HTTP traffic (a "cold start" on the next
-request). `render.yaml` in this repo defines two services to handle both
-of those constraints — see `doc/architecture.md` §2a for the full design
-rationale:
+request) — see `doc/architecture.md` §2a for the full design rationale.
+`render.yaml` in this repo defines a single **`groupledger`** (`type: web`)
+service for the bot itself.
 
-1. **`groupledger`** (`type: web`) — the bot itself.
-2. **`groupledger-keepalive`** (`type: cron`) — a scheduled job, built into
-   the same Blueprint, that runs every 10 minutes and makes one HTTP
-   request to the web service's public `/keepalive` endpoint. That single
-   request is enough to reset Render's inactivity timer, so the web
-   service never spins down. `/keepalive` itself tracks and returns how
-   many pings it's received and when the last one landed
-   (`pingCount`/`lastPingAt`), so you can confirm from the response body
-   that the cron is actually reaching it.
+**Keeping it awake:** Render's Cron Job service type is not available on
+the free workspace plan (confirmed against the dashboard — cron jobs are
+billed per-second with a $1/month minimum, with no free option). So the
+keepalive ping has to come from an external scheduler instead — any of
+these work, all free, no card required:
 
-A `cron` service on Render runs on its own schedule and exits when done —
-it's a separate, tiny process from the bot, not a thread inside it. Its
-only job here is firing that one HTTP request.
+- [cron-job.org](https://cron-job.org) — a free scheduled HTTP pinger.
+- [UptimeRobot](https://uptimerobot.com) — same idea, plus uptime alerting.
+- A scheduled GitHub Actions workflow in this (or any) repo that just
+  `curl`s the URL.
+
+Point whichever one you pick at `https://<your-service>.onrender.com/keepalive`
+on a ~10 minute interval — comfortably under the 15-minute spin-down
+window. `/keepalive` tracks and returns how many pings it's received and
+when the last one landed (`pingCount`/`lastPingAt`), so you can confirm
+from the response body that the external pinger is actually reaching it.
 
 ### Steps
 
 1. Push this repo to GitHub/GitLab (`auth/`, `data/`, and `.env` are
    gitignored already — never commit real credentials or session state).
 2. In the Render dashboard: **New +** → **Blueprint**, then point it at
-   your repo. Render detects `render.yaml` and provisions both services.
+   your repo. Render detects `render.yaml` and provisions the service.
 3. During Blueprint setup, Render prompts you for every `sync: false`
    variable: `WHATSAPP_GROUP_ID` (can stay empty for now),
    `GOOGLE_SERVICE_ACCOUNT_EMAIL`, `GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY`,
    `GOOGLE_SHEET_ID`, and optionally `LLM_API_KEY`,
-   `BOT_ADMIN_FALLBACK_NUMBER`, `REDIS_URL`. Fill these in from your own
-   `.env`. Leave `groupledger-keepalive`'s `KEEPALIVE_URL` blank for now —
-   the web service doesn't have a public URL yet on the very first deploy.
-4. Deploy. Once `groupledger` is live, open its page in the Render
-   dashboard and copy its public URL (e.g.
-   `https://groupledger.onrender.com`).
-5. Go to the `groupledger-keepalive` cron job's **Environment** tab, set
-   `KEEPALIVE_URL` to that URL plus `/keepalive` (e.g.
-   `https://groupledger.onrender.com/keepalive`), and save.
-6. Open the `groupledger` service's **Logs** tab and watch for the QR
-   code — scan it from the bot's WhatsApp number (**Linked Devices → Link
-   a Device**), same as running locally. Since Render's free web services
-   have no persistent disk, set `REDIS_URL` (e.g. an
+   `BOT_ADMIN_FALLBACK_NUMBER`, `REDIS_URL`, and the normalizer vars
+   (`NORMALIZER_MODE`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`,
+   `OPENROUTER_FALLBACK_MODEL`) if you want LLM-based cleanup live in
+   production too. Fill these in from your own `.env`.
+4. Deploy. Open the `groupledger` service's **Logs** tab and watch for
+   the QR code — scan it from the bot's WhatsApp number (**Linked
+   Devices → Link a Device**), same as running locally. Since Render's
+   free web services have no persistent disk, set `REDIS_URL` (e.g. an
    [Upstash](https://upstash.com/) free-tier instance) beforehand so the
    session survives restarts/redeploys instead of needing a fresh QR scan
    every time — see `.env.example`'s `REDIS_URL` comment.
-7. Send a message in your target WhatsApp group, copy the group JID
+5. Once live, copy the service's public URL (e.g.
+   `https://groupledger.onrender.com`) and set up your external pinger
+   (see above) against `<that URL>/keepalive`.
+6. Send a message in your target WhatsApp group, copy the group JID
    Render logs to the console, set it as `WHATSAPP_GROUP_ID` in the
    `groupledger` service's Environment tab, and it'll pick it up on the
    next restart.
@@ -163,24 +164,13 @@ only job here is firing that one HTTP request.
 - Visit `https://<your-service>.onrender.com/keepalive` in a browser —
   you should get back `{"status":"OK","pingCount":N,"lastPingAt":"...","uptimeSeconds":...}`.
   `pingCount` going up and `lastPingAt` staying recent (within the last
-  ~10 minutes) means the cron job is reaching the service.
-- In the Render dashboard, the `groupledger-keepalive` cron job's own
-  **Logs**/**Events** tab shows each run and whether `curl` succeeded —
-  useful if `pingCount` ever stalls.
+  ~10 minutes) means the external pinger is reaching the service.
+- Most external pinger dashboards (cron-job.org, UptimeRobot) show their
+  own run history/response codes too — useful cross-check if `pingCount`
+  ever stalls.
 - `GET /health` includes the same `keepalive` stats alongside queue
   status, if you've enabled `QUEUE_ENABLED` — see
   [RUNBOOK.md](./RUNBOOK.md) §6.
-
-### Extra redundancy (optional)
-
-Render's own cron job above is normally sufficient on its own. If you want
-a second, independent layer — so a ping still lands even during a brief
-Render-side cron hiccup — you can additionally point a free external
-pinger like [cron-job.org](https://cron-job.org) at the same
-`/keepalive` URL, on a similar ~10 minute interval. This was the original
-plan in `doc/architecture.md` before the cron job was folded into
-`render.yaml`; both can run at once with no conflict, since `/keepalive`
-has no side effects beyond incrementing its own ping counter.
 
 ### Migrating off Render later
 
@@ -188,8 +178,8 @@ The codebase is host-agnostic (env-var driven, no hardcoded Render paths),
 so moving to an always-on host (e.g. an Oracle Cloud "Always Free" VM) is
 a redeploy, not a rewrite — see `doc/architecture.md` §2a. On a host with
 a persistent disk, you can drop `REDIS_URL` entirely and go back to local
-`./auth`, and the `groupledger-keepalive` cron job becomes unnecessary
-(an always-on host never spins down).
+`./auth`, and the external keepalive pinger becomes unnecessary (an
+always-on host never spins down).
 
 ## Project structure
 
@@ -219,7 +209,7 @@ tests/                           Unit/integration tests (node:test)
 data/                             Runtime state — pending-store.json, audit.log (gitignored)
 auth/                             Baileys session credentials (gitignored)
 ecosystem.config.js              pm2 process configuration
-render.yaml                      Render Blueprint (web service + keepalive cron job)
+render.yaml                      Render Blueprint (web service — keepalive needs an external pinger, see "Deploying to Render")
 RUNBOOK.md                       Operational guide for the job queue + normalizer
 ```
 
