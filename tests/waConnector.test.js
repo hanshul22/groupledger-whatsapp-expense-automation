@@ -37,7 +37,7 @@ const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
 
-const { extractText, isGroupAdmin } = require('../src/waConnector');
+const { extractText, isGroupAdmin, extractReactionInfo } = require('../src/waConnector');
 
 const WA_CONNECTOR_PATH = path.join(__dirname, '..', 'src', 'waConnector.js');
 
@@ -253,6 +253,50 @@ describe('connection.update close/reconnect logic (behavioral, replicated from w
     for (let i = 1; i < delays.length; i += 1) {
       assert.ok(delays[i] >= delays[i - 1], `expected non-decreasing delays, got ${delays}`);
     }
+  });
+});
+
+describe('extractReactionInfo', () => {
+  // Shape captured verbatim (ids/jids only) from a real Baileys
+  // messages.reaction event in production: reaction.key is the message
+  // reacted TO (authored by the bot), reaction.reaction.key is the
+  // reaction's own message, authored by the person who reacted.
+  const realEvent = {
+    key: {
+      remoteJid: '120363412414866190@g.us',
+      fromMe: false,
+      id: '3EB00F12A52ADE7DA643A8',
+      participant: '231482295591101@lid',
+    },
+    reaction: {
+      key: {
+        remoteJid: '120363412414866190@g.us',
+        fromMe: false,
+        id: '3EB0D12DFFE791B7E453E0',
+        participant: '157105625559108@lid',
+        participantPn: '919166983560@s.whatsapp.net',
+      },
+      text: '👍',
+    },
+  };
+
+  test('reads the reacted-to message id from reaction.key, not the reaction event\'s own id', () => {
+    assert.strictEqual(extractReactionInfo(realEvent).reactedMessageId, '3EB00F12A52ADE7DA643A8');
+  });
+
+  test('reads the reactor from reaction.reaction.key, not the original message author', () => {
+    assert.strictEqual(extractReactionInfo(realEvent).reactorJid, '157105625559108@lid');
+  });
+
+  test('falls back to participantPn when the reactor has no participant jid', () => {
+    const event = structuredClone(realEvent);
+    delete event.reaction.key.participant;
+    assert.strictEqual(extractReactionInfo(event).reactorJid, '919166983560@s.whatsapp.net');
+  });
+
+  test('returns the emoji and tolerates a malformed event without throwing', () => {
+    assert.strictEqual(extractReactionInfo(realEvent).emoji, '👍');
+    assert.deepStrictEqual(extractReactionInfo({}), { emoji: undefined, reactedMessageId: undefined, reactorJid: undefined });
   });
 });
 

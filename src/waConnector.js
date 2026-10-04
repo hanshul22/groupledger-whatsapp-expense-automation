@@ -70,6 +70,34 @@ function extractQuotedMessageId(msg) {
 }
 
 /**
+ * Pull the three facts the approval flow needs out of a Baileys
+ * `messages.reaction` event. The event has TWO keys, easy to confuse:
+ *   - `reaction.key`           -> the message that was reacted TO (its
+ *                                 id is what we stored at send time; its
+ *                                 participant is that message's AUTHOR,
+ *                                 i.e. the bot, not the reactor).
+ *   - `reaction.reaction.key`  -> the reaction event's OWN message (a
+ *                                 fresh id each time; its participant is
+ *                                 the person who REACTED, with
+ *                                 `participantPn` as the phone-number
+ *                                 form of that same person).
+ * Reading the second key's id (as this code originally did) never matches
+ * a stored notification id, and reading the first key's participant makes
+ * the admin check run against the bot itself.
+ *
+ * @param {object} reaction - A Baileys messages.reaction event entry.
+ * @returns {{emoji: string|undefined, reactedMessageId: string|undefined, reactorJid: string|undefined}}
+ */
+function extractReactionInfo(reaction) {
+  const reactionKey = reaction?.reaction?.key;
+  return {
+    emoji: reaction?.reaction?.text,
+    reactedMessageId: reaction?.key?.id,
+    reactorJid: reactionKey?.participant || reactionKey?.participantPn,
+  };
+}
+
+/**
  * Check whether a participant is a current admin of a group.
  * Always fetches live group metadata (not cached), per architecture.md §4
  * ("Admin authority check: always re-verified live").
@@ -267,4 +295,5 @@ module.exports = {
   isGroupAdmin,
   extractText,
   extractQuotedMessageId,
+  extractReactionInfo,
 };

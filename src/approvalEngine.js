@@ -415,7 +415,7 @@ function createApprovalEngine(deps) {
    * @param {{emoji: string, reactorJid: string, reactedMessageId: string, responderName?: string}} options
    * @returns {Promise<void>}
    */
-  async function handleReaction({ emoji, reactorJid, reactedMessageId, responderName, debugListPendingNotificationIds }) {
+  async function handleReaction({ emoji, reactorJid, reactedMessageId, responderName }) {
     const verb = classifyReactionEmoji(emoji);
     if (!verb) {
       // TEMP DIAGNOSTIC — see index.js's GET /debug-logs route.
@@ -423,59 +423,12 @@ function createApprovalEngine(deps) {
       return; // disregarded — Req 4.3
     }
 
-    let pendingEntry = pendingStore.findByNotificationMessageId(reactedMessageId);
-
-    if (!pendingEntry && debugListPendingNotificationIds) {
-      // TEMP DIAGNOSTIC (deeper) — dump every currently-pending entry's
-      // tracked notification message id(s) side-by-side with the id the
-      // reaction actually reported, so a near-miss (off-by-a-character,
-      // wrong case, etc.) is visible directly rather than inferred.
-      const allPendingIds = pendingStore.getAllIds();
-      const dump = allPendingIds
-        .map((id) => pendingStore.getById(id))
-        .filter((e) => e && e.status === 'pending')
-        .map((e) => ({ entryId: e.entryId, notificationMessageIds: e.notificationMessageIds, submittedAt: e.submittedAt }));
-      onDebugLog('handleReaction: exact match failed — dumping all tracked notification ids for comparison', {
-        reactedMessageId,
-        trackedEntries: dump,
-      });
-    }
+    const pendingEntry = pendingStore.findByNotificationMessageId(reactedMessageId);
 
     if (!pendingEntry) {
-      // ponytail: WhatsApp/Baileys has a known quirk (WhiskeySockets/
-      // Baileys#656 and others) where a group reaction event's
-      // key.id does not always match the id of the message that was
-      // actually reacted to, specifically for participants on a @lid
-      // (linked/companion device) identity. This is a protocol/library-
-      // level inconsistency, not something fixable by changing how we
-      // store/look up notification message ids. Fallback: if the exact
-      // id isn't tracked but there is EXACTLY ONE still-pending entry
-      // right now, treat the reaction as being for that entry — safe
-      // specifically because it's unambiguous (only one candidate it
-      // could possibly mean); falls back to disregarding the reaction
-      // (as before) whenever 0 or 2+ entries are pending, rather than
-      // ever guessing among multiple candidates. Ceiling: this breaks
-      // down if there are ever 2+ simultaneous pending approvals and the
-      // id mismatch bug fires — upgrade path is matching Baileys'
-      // getLIDForPN-based resolution (see the upstream fix referenced in
-      // the investigation) once a library version ships it, or asking
-      // admins to reply with text (APPROVE/REJECT <id>) instead of
-      // reacting when more than one entry is pending at once.
-      const pendingIds = pendingStore.getAllIds().filter((id) => pendingStore.getById(id)?.status === 'pending');
-      if (pendingIds.length === 1) {
-        pendingEntry = pendingStore.getById(pendingIds[0]);
-        onDebugLog('handleReaction: reactedMessageId not tracked, falling back to the single pending entry', {
-          reactedMessageId,
-          entryId: pendingEntry.entryId,
-        });
-      } else {
-        // TEMP DIAGNOSTIC — see index.js's GET /debug-logs route.
-        onDebugLog('handleReaction: no pending entry found for reactedMessageId', {
-          reactedMessageId,
-          pendingCount: pendingIds.length,
-        });
-        return; // disregarded — Req 4.3
-      }
+      // TEMP DIAGNOSTIC — see index.js's GET /debug-logs route.
+      onDebugLog('handleReaction: no pending entry found for reactedMessageId', { reactedMessageId });
+      return; // disregarded — Req 4.3
     }
     if (pendingEntry.status !== 'pending') {
       // TEMP DIAGNOSTIC — see index.js's GET /debug-logs route.

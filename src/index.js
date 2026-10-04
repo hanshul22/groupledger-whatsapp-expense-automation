@@ -6,7 +6,7 @@ require('dotenv').config();
 
 const express = require('express');
 const QRCode = require('qrcode');
-const { startWhatsApp, isGroupAdmin } = require('./waConnector');
+const { startWhatsApp, isGroupAdmin, extractReactionInfo } = require('./waConnector');
 const { createNormalizer } = require('./normalizer');
 const { createApprovalEngine } = require('./approvalEngine');
 const { createSheetsWriter } = require('./sheetsWriter');
@@ -593,36 +593,26 @@ startWhatsApp({
   },
 
   onReaction: async (sock, reaction) => {
-    const reactorJid = reaction.key.participant;
-    // TEMP DIAGNOSTIC — remove once the "reaction isn't resolving" issue
-    // is confirmed fixed. Logs exactly what Baileys handed us so we can
-    // tell whether the event is arriving at all, and with what shape.
-    // See GET /debug-logs (defined earlier in this file) to read these
-    // back without relying on Render's dashboard log viewer.
+    const { emoji, reactedMessageId, reactorJid } = extractReactionInfo(reaction);
+    // TEMP DIAGNOSTIC — remove once reaction approvals are confirmed
+    // working in production. Read back via GET /debug-logs.
     pushDebugLog('reaction received', {
-      emoji: reaction?.reaction?.text,
+      emoji,
       reactorJid,
-      reactedMessageId: reaction?.reaction?.key?.id,
+      reactedMessageId,
       hasApprovalEngine: Boolean(approvalEngine),
-      // TEMP DIAGNOSTIC (deeper) — the FULL raw reaction event, every
-      // field Baileys gave us, not just the three we normally read.
-      // Looking for any alternate id (e.g. a participantAlt/remoteJidAlt
-      // pair, or a second id field) that might be the real match for
-      // the originally-sent message, since reaction.reaction.key.id has
-      // been observed not matching what we stored at send time.
-      rawReaction: reaction,
     });
     await approvalEngine?.handleReaction({
-      debugListPendingNotificationIds: true, // see approvalEngine.js's TEMP DIAGNOSTIC handling of this flag
-      emoji: reaction.reaction.text,
+      emoji,
       reactorJid,
-      reactedMessageId: reaction.reaction.key.id,
+      reactedMessageId,
       // Reaction events carry no display name of their own — look up the
       // last-seen pushName for this JID (see pushNameCache.js) so a
       // reaction-based APPROVE/REJECT still records a real name whenever
       // possible, instead of always falling back to a cleaned JID.
       responderName: pushNameCache.get(reactorJid),
     });
+    pushDebugLog('reaction handled', { reactedMessageId });
   },
 });
 
