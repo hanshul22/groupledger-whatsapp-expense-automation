@@ -107,10 +107,22 @@ function notificationText(pendingEntry) {
  *   about; mutated in place and persisted before this function returns.
  * @returns {Promise<void>}
  */
-async function notifyAdmins({ sock, groupId, sendMessage, pendingStore, pendingEntry }) {
+async function notifyAdmins({ sock, groupId, sendMessage, pendingStore, pendingEntry, onDebugLog }) {
   try {
     const sendResult = await sendMessage(groupId, { text: notificationText(pendingEntry) });
     const messageId = sendResult && sendResult.key ? sendResult.key.id : undefined;
+    // TEMP DIAGNOSTIC — remove once the "reaction isn't resolving" issue
+    // is confirmed fixed. Logs exactly what message id got stored at
+    // notification time, to compare against whatever id a later reaction
+    // event reports for the same message (see index.js's GET
+    // /debug-logs).
+    if (typeof onDebugLog === 'function') {
+      onDebugLog('notifyAdmins: stored notificationMessageId', {
+        entryId: pendingEntry.entryId,
+        messageId,
+        sendResultKey: sendResult && sendResult.key,
+      });
+    }
     pendingEntry.notificationMessageIds = messageId ? [messageId] : [];
     pendingEntry.notified = Boolean(messageId);
   } catch (err) {

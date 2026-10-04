@@ -306,7 +306,7 @@ function createApprovalEngine(deps) {
 
     await pendingStore.add(pendingEntry);
 
-    await notifyAdmins({ sock, groupId, sendMessage, pendingStore, pendingEntry });
+    await notifyAdmins({ sock, groupId, sendMessage, pendingStore, pendingEntry, onDebugLog });
   }
 
   /**
