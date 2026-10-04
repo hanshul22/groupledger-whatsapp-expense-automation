@@ -415,7 +415,7 @@ function createApprovalEngine(deps) {
    * @param {{emoji: string, reactorJid: string, reactedMessageId: string, responderName?: string}} options
    * @returns {Promise<void>}
    */
-  async function handleReaction({ emoji, reactorJid, reactedMessageId, responderName }) {
+  async function handleReaction({ emoji, reactorJid, reactedMessageId, responderName, debugListPendingNotificationIds }) {
     const verb = classifyReactionEmoji(emoji);
     if (!verb) {
       // TEMP DIAGNOSTIC — see index.js's GET /debug-logs route.
@@ -424,6 +424,22 @@ function createApprovalEngine(deps) {
     }
 
     let pendingEntry = pendingStore.findByNotificationMessageId(reactedMessageId);
+
+    if (!pendingEntry && debugListPendingNotificationIds) {
+      // TEMP DIAGNOSTIC (deeper) — dump every currently-pending entry's
+      // tracked notification message id(s) side-by-side with the id the
+      // reaction actually reported, so a near-miss (off-by-a-character,
+      // wrong case, etc.) is visible directly rather than inferred.
+      const allPendingIds = pendingStore.getAllIds();
+      const dump = allPendingIds
+        .map((id) => pendingStore.getById(id))
+        .filter((e) => e && e.status === 'pending')
+        .map((e) => ({ entryId: e.entryId, notificationMessageIds: e.notificationMessageIds, submittedAt: e.submittedAt }));
+      onDebugLog('handleReaction: exact match failed — dumping all tracked notification ids for comparison', {
+        reactedMessageId,
+        trackedEntries: dump,
+      });
+    }
 
     if (!pendingEntry) {
       // ponytail: WhatsApp/Baileys has a known quirk (WhiskeySockets/

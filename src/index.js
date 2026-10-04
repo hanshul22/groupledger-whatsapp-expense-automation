@@ -604,8 +604,16 @@ startWhatsApp({
       reactorJid,
       reactedMessageId: reaction?.reaction?.key?.id,
       hasApprovalEngine: Boolean(approvalEngine),
+      // TEMP DIAGNOSTIC (deeper) — the FULL raw reaction event, every
+      // field Baileys gave us, not just the three we normally read.
+      // Looking for any alternate id (e.g. a participantAlt/remoteJidAlt
+      // pair, or a second id field) that might be the real match for
+      // the originally-sent message, since reaction.reaction.key.id has
+      // been observed not matching what we stored at send time.
+      rawReaction: reaction,
     });
     await approvalEngine?.handleReaction({
+      debugListPendingNotificationIds: true, // see approvalEngine.js's TEMP DIAGNOSTIC handling of this flag
       emoji: reaction.reaction.text,
       reactorJid,
       reactedMessageId: reaction.reaction.key.id,
