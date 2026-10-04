@@ -5,6 +5,7 @@
 require('dotenv').config();
 
 const express = require('express');
+const QRCode = require('qrcode');
 const { startWhatsApp, isGroupAdmin } = require('./waConnector');
 const { createNormalizer } = require('./normalizer');
 const { createApprovalEngine } = require('./approvalEngine');
@@ -183,6 +184,35 @@ app.get('/keepalive', (req, res) => {
     lastPingAt: keepaliveStats.lastPingAt.toISOString(),
     uptimeSeconds: Math.round(process.uptime()),
   });
+});
+
+// Render's web log viewer prefixes every line with a timestamp, which
+// breaks the grid alignment of waConnector.js's terminal-art QR code and
+// makes it unscannable even though it prints correctly. This route is a
+// fallback for exactly that situation: open it in a browser and scan the
+// image directly instead of trying to scan the mangled logs. `latestQr`
+// holds only the most recent QR string (Baileys reissues a new one every
+// ~20s until scanned) — never persisted, nothing sensitive about it once
+// the session is linked (it's meaningless after that point anyway).
+let latestQr = null;
+app.get('/qr', async (req, res) => {
+  if (!latestQr) {
+    res.status(200).send('<p>No QR code pending — the bot is either already linked, or hasn\'t started up yet. Refresh in a few seconds.</p>');
+    return;
+  }
+  try {
+    const dataUrl = await QRCode.toDataURL(latestQr, { width: 320, margin: 2 });
+    res.status(200).send(
+      `<!DOCTYPE html><html><body style="display:flex;flex-direction:column;align-items:center;font-family:sans-serif;">
+        <h3>Scan with the bot's WhatsApp number — Linked Devices &rarr; Link a Device</h3>
+        <img src="${dataUrl}" alt="WhatsApp QR code" />
+        <p>Expires in ~20s — refresh this page if it stops working.</p>
+      </body></html>`
+    );
+  } catch (err) {
+    console.error('Failed to render QR code image:', err);
+    res.status(500).send('Failed to render QR code.');
+  }
 });
 
 // v1.2 — Part A7: "Add GET /health returning queue counts only (no
@@ -365,8 +395,13 @@ if (jobQueue) {
 startWhatsApp({
   getAuthState,
   onDisconnected: () => connectionMonitor.onDisconnected(),
+  onQrCode: (qr) => {
+    latestQr = qr;
+  },
   onReady: async (sock) => {
     console.log('Bot is ready');
+    latestQr = null; // scanned/connected — the /qr fallback has nothing left to show
+
 
     // v1.2 — make the live socket available to the inbound_message job
     // handler (registered above, before any socket existed) and start

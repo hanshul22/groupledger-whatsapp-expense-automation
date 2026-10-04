@@ -144,10 +144,14 @@ from the response body that the external pinger is actually reaching it.
    (`NORMALIZER_MODE`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`,
    `OPENROUTER_FALLBACK_MODEL`) if you want LLM-based cleanup live in
    production too. Fill these in from your own `.env`.
-4. Deploy. Open the `groupledger` service's **Logs** tab and watch for
-   the QR code — scan it from the bot's WhatsApp number (**Linked
-   Devices → Link a Device**), same as running locally. Since Render's
-   free web services have no persistent disk, set `REDIS_URL` (e.g. an
+4. Deploy. Open `https://<your-service>.onrender.com/qr` in a browser and
+   scan the QR image shown there from the bot's WhatsApp number (**Linked
+   Devices → Link a Device**). Use this instead of the Logs tab — Render's
+   web log viewer prefixes every line with a timestamp, which breaks the
+   terminal QR code's grid alignment and makes it unscannable even though
+   it prints "correctly." The code rotates every ~20s until scanned, so
+   refresh the page if it goes stale. Since Render's free web services
+   have no persistent disk, set `REDIS_URL` (e.g. an
    [Upstash](https://upstash.com/) free-tier instance) beforehand so the
    session survives restarts/redeploys instead of needing a fresh QR scan
    every time — see `.env.example`'s `REDIS_URL` comment.

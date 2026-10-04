@@ -105,6 +105,14 @@ async function isGroupAdmin(sock, groupId, participantJid) {
  * @param {(sock: any) => void} handlers.onReady - called once the connection opens.
  * @param {(sock: any, reaction: any) => void} handlers.onReaction - called once per
  *   reaction event received via the 'messages.reaction' listener.
+ * @param {(qr: string) => void} [handlers.onQrCode] - called with the raw
+ *   QR string every time Baileys issues a new one, in addition to (not
+ *   instead of) the existing terminal print. Render's web log viewer
+ *   mangles ASCII-art QR codes (each line gets its own timestamp prefix,
+ *   breaking the grid), making the terminal QR unscannable on a host
+ *   where logs are the only console you have — this hook lets index.js
+ *   also serve the same QR as a real image over HTTP (GET /qr) as a
+ *   reliable fallback.
  * @param {() => void} [handlers.onDisconnected] - Phase 7. Called once,
  *   synchronously, whenever the connection closes — including when it will
  *   NOT auto-reconnect (explicit logout) — before that logout check runs.
@@ -130,6 +138,7 @@ async function startWhatsApp({
   onReady,
   onReaction,
   onDisconnected,
+  onQrCode,
   getAuthState = () => useMultiFileAuthState(AUTH_DIR),
   setTimeoutFn = setTimeout,
   reconnectAttempt = 0,
@@ -156,6 +165,9 @@ async function startWhatsApp({
     if (qr) {
       console.log('Scan this QR code with the dedicated bot WhatsApp number:');
       qrcodeTerminal.generate(qr, { small: true });
+      if (typeof onQrCode === 'function') {
+        onQrCode(qr);
+      }
     }
 
     if (connection === 'open') {
@@ -193,6 +205,7 @@ async function startWhatsApp({
           onReady,
           onReaction,
           onDisconnected,
+          onQrCode,
           getAuthState,
           setTimeoutFn,
           reconnectAttempt: currentAttempt + 1,
