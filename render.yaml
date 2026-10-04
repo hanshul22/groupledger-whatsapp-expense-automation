@@ -68,7 +68,16 @@ services:
         sync: false
       - key: OPENROUTER_FALLBACK_MODEL
         sync: false
+      # Enabled by default: Render's free web services have no persistent
+      # disk, so a restart wipes the file-backed pending-approval store
+      # (./data/pending-store.json), silently losing any not-yet-decided
+      # approval request. QUEUE_ENABLED=true + STATE_STORE=redis moves
+      # that storage into the same Redis instance already used for the
+      # WhatsApp auth session (REDIS_URL), so it survives restarts/
+      # redeploys. Set both to false/file instead if you don't want the
+      # durable job queue's other behavior (retry/backoff, /queue admin
+      # command) — see RUNBOOK.md.
       - key: QUEUE_ENABLED
-        value: false
+        value: true
       - key: STATE_STORE
-        value: file
+        value: redis
