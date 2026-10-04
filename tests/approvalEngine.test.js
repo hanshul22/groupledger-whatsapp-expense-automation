@@ -1347,8 +1347,16 @@ describe('createApprovalEngine — reaction matching', () => {
     );
   });
 
-  // Feature: approval-engine, Property 7: Reactions are matched only when they are ✅/❌ on a tracked notification for an unresolved entry
-  test('Property 7c: a ✅/❌ reaction on a message id that is not a tracked notification is disregarded', async () => {
+  // Feature: approval-engine, Property 7: Reactions are matched only when
+  // they are ✅/❌ on a tracked notification for an unresolved entry — AS
+  // AMENDED by the single-pending-entry fallback (see
+  // src/approvalEngine.js's `handleReaction`, "ponytail:" comment): a
+  // reaction whose message id isn't tracked still resolves the one
+  // unambiguous candidate when exactly one entry is pending, working
+  // around a documented WhatsApp/Baileys quirk where a group reaction
+  // event's key.id doesn't always match the reacted-to message's real
+  // id for @lid participants (WhiskeySockets/Baileys#656 and others).
+  test('Property 7c: a ✅/❌ reaction on an untracked message id resolves the single pending entry (fallback)', async () => {
     await fc.assert(
       fc.asyncProperty(
         parsedEntryArb,
@@ -1393,23 +1401,22 @@ describe('createApprovalEngine — reaction matching', () => {
             const ids = freshStoreBefore.getAllIds();
             assert.strictEqual(ids.length, 1, `expected exactly one pending entry, got ${ids.length}`);
             const entryId = ids[0];
-            const entryBefore = freshStoreBefore.getById(entryId);
-            assert.deepStrictEqual(entryBefore.notificationMessageIds, ['notif-msg-1']);
 
             adminMode = true;
 
             await engine.handleReaction({ emoji, reactorJid: 'admin1', reactedMessageId: untrackedMessageId });
 
+            // Exactly one pending entry existed, so the fallback resolves
+            // it even though `untrackedMessageId` was never the entry's
+            // real notification message id.
             assert.strictEqual(
               onResolutionCalls.length,
-              0,
-              `expected onResolution to never be called for an untracked message id ${JSON.stringify(untrackedMessageId)}, got ${onResolutionCalls.length}`,
+              1,
+              `expected the single-pending-entry fallback to resolve entry ${entryId} for untracked message id ${JSON.stringify(untrackedMessageId)}`,
             );
-
-            const freshStoreAfter = createPendingStore({ storePath, auditLogPath });
-            await freshStoreAfter.init();
-            const entryAfter = freshStoreAfter.getById(entryId);
-            assert.deepStrictEqual(entryAfter, entryBefore, 'expected the Pending_Entry to remain unchanged');
+            const expectedStatus = emoji === '✅' ? 'approved' : 'rejected';
+            assert.strictEqual(onResolutionCalls[0].status, expectedStatus);
+            assert.strictEqual(onResolutionCalls[0].entryId, entryId);
           } finally {
             fs.rmSync(tmpDir, { recursive: true, force: true });
           }
@@ -1417,6 +1424,84 @@ describe('createApprovalEngine — reaction matching', () => {
       ),
       { numRuns: 30 },
     );
+  });
+
+  // Companion to Property 7c: the fallback is deliberately narrow — with
+  // ZERO pending entries, there is no unambiguous candidate, so an
+  // untracked reaction is still disregarded exactly as before.
+  test('Property 7c-zero: a ✅/❌ reaction on an untracked message id is disregarded when there are zero pending entries', async () => {
+    const tmpDir = makeTmpDir();
+    try {
+      const storePath = path.join(tmpDir, 'pending-store.json');
+      const auditLogPath = path.join(tmpDir, 'audit.log');
+
+      const onResolutionCalls = [];
+      const engine = createApprovalEngine({
+        sock: {},
+        groupId: 'g',
+        isGroupAdmin: async () => true,
+        sendMessage: async () => ({ key: { id: 'x' } }),
+        onResolution: async (r) => onResolutionCalls.push(r),
+        storePath,
+        auditLogPath,
+      });
+
+      await engine.init();
+
+      await engine.handleReaction({ emoji: '✅', reactorJid: 'admin1', reactedMessageId: 'totally-untracked' });
+
+      assert.strictEqual(onResolutionCalls.length, 0);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  // Companion to Property 7c: with TWO OR MORE pending entries, the
+  // fallback must not guess among them — an untracked reaction is still
+  // disregarded, same as before this fallback existed.
+  test('Property 7c-multiple: a ✅/❌ reaction on an untracked message id is disregarded when more than one entry is pending', async () => {
+    const tmpDir = makeTmpDir();
+    try {
+      const storePath = path.join(tmpDir, 'pending-store.json');
+      const auditLogPath = path.join(tmpDir, 'audit.log');
+
+      const onResolutionCalls = [];
+      const engine = createApprovalEngine({
+        sock: { groupMetadata: async () => ({ participants: [] }) },
+        groupId: 'g',
+        isGroupAdmin: async () => false,
+        sendMessage: async () => ({ key: { id: 'notif-a' } }),
+        onResolution: async (r) => onResolutionCalls.push(r),
+        storePath,
+        auditLogPath,
+      });
+
+      await engine.init();
+
+      // Two separate non-admin submissions -> two pending entries.
+      await engine.submitEntry(
+        { amount: 100, given_to: 'A', date: '2024-06-15', paid_by: 'X', raw_message: 'a' },
+        { submittedBy: 'Momo', submittedByJid: 'momo@s.whatsapp.net', submittedAt: new Date() },
+      );
+      await engine.submitEntry(
+        { amount: 200, given_to: 'B', date: '2024-06-15', paid_by: 'Y', raw_message: 'b' },
+        { submittedBy: 'Momo', submittedByJid: 'momo@s.whatsapp.net', submittedAt: new Date() },
+      );
+
+      const freshStore = createPendingStore({ storePath, auditLogPath });
+      await freshStore.init();
+      assert.strictEqual(freshStore.getAllIds().length, 2, 'expected exactly two pending entries');
+
+      await engine.handleReaction({ emoji: '✅', reactorJid: 'admin1', reactedMessageId: 'totally-untracked' });
+
+      assert.strictEqual(
+        onResolutionCalls.length,
+        0,
+        'expected no resolution — the fallback must not guess among multiple pending entries',
+      );
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 
   // Covers the extended emoji synonym sets (APPROVE_EMOJI/REJECT_EMOJI in
