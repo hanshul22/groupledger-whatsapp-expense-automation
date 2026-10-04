@@ -65,6 +65,12 @@ function setupQueue(options = {}) {
   // treating Redis contents as sensitive; ioredis negotiates TLS
   // automatically from a rediss:// URL, no extra option needed here.
   const redis = new Ctor(redisUrl);
+  // Same reasoning as authState.js's auth-state Redis client: an
+  // unhandled ioredis 'error' event crashes the process. The queue
+  // already treats a Redis outage as recoverable (local buffer file,
+  // retry sweeps) — don't let a transient connection error take down
+  // the whole bot on top of that.
+  redis.on('error', (err) => console.error('Queue Redis client error:', err));
 
   const store = createRedisJobStore({ redis });
   const queue = createJobQueue({

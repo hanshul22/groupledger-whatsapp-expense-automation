@@ -167,6 +167,7 @@ test('Property 7: The auth-state factory selects the configured backend and no o
         async get() { return null; }
         async set() {}
         async del() {}
+        on() {} // real ioredis is an EventEmitter — createAuthStateFactory attaches an 'error' listener
       }
 
       const getAuthState = createAuthStateFactory({ redisUrl, RedisClientCtor: SpyRedisClient });
@@ -207,6 +208,7 @@ test('createAuthStateFactory with redisUrl set reuses the same client instance a
     async get(key) { return this.store.has(key) ? this.store.get(key) : null; }
     async set(key, value) { this.store.set(key, value); }
     async del(key) { this.store.delete(key); }
+    on() {} // real ioredis is an EventEmitter — createAuthStateFactory attaches an 'error' listener
   }
 
   const getAuthState = createAuthStateFactory({ redisUrl: 'redis://fake', RedisClientCtor: SpyRedisClient });

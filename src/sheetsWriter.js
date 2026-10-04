@@ -106,14 +106,32 @@ function generateSheetRowId() {
  * @param {object} resolution
  * @returns {(string|number)[]} An 11-element row array in COLUMNS order.
  */
+// Characters Sheets/Excel treat as a formula trigger when a cell is
+// written with valueInputOption: 'USER_ENTERED' (needed so numeric/date
+// columns are interpreted as real numbers/dates for the Summary tab's
+// SUMIF/QUERY formulas — see appendRow's doc comment). Every other
+// column in a row is free text that ultimately comes from a WhatsApp
+// message (raw_message, given_to, party, description) or an LLM's
+// reading of one — never sanitized before this point — so a message
+// starting with one of these could otherwise execute as a formula for
+// anyone who opens the sheet (classic spreadsheet-formula injection).
+// Prefixing with a single quote is the standard mitigation: Sheets then
+// renders the value as literal text instead of evaluating it.
+const FORMULA_TRIGGER_CHARS = ['=', '+', '-', '@'];
+
+function sanitizeSheetText(value) {
+  if (typeof value !== 'string' || value.length === 0) return value;
+  return FORMULA_TRIGGER_CHARS.includes(value[0]) ? `'${value}` : value;
+}
+
 function mapToRow(resolution) {
   const entry = resolution.entry || {};
   const isRejected = resolution.status === 'rejected';
 
   const entryId = resolution.entryId || generateSheetRowId();
-  const description = entry.notes || '';
-  const party = entry.party || '';
-  const actorBy = isRejected ? resolution.rejected_by : resolution.approved_by;
+  const description = sanitizeSheetText(entry.notes || '');
+  const party = sanitizeSheetText(entry.party || '');
+  const actorBy = sanitizeSheetText(isRejected ? resolution.rejected_by : resolution.approved_by);
   const actorAt = formatSheetTimestamp(isRejected ? resolution.rejected_at : resolution.approved_at);
 
   // v1.1 — columns L-N, per doc/trd.md §8.6. Blank (empty string) when the
@@ -123,20 +141,20 @@ function mapToRow(resolution) {
   const llmConfidence = normalizerMeta && typeof normalizerMeta.confidence === 'number'
     ? normalizerMeta.confidence
     : '';
-  const normalizationNotes = (normalizerMeta && normalizerMeta.notes) || '';
+  const normalizationNotes = sanitizeSheetText((normalizerMeta && normalizerMeta.notes) || '');
 
   return [
     entryId,
     entry.date,
     description,
     entry.amount,
-    entry.given_to,
-    resolution.submittedBy,
+    sanitizeSheetText(entry.given_to),
+    sanitizeSheetText(resolution.submittedBy),
     party,
     resolution.status,
     actorBy,
     actorAt,
-    entry.raw_message,
+    sanitizeSheetText(entry.raw_message),
     normalizedBy,
     llmConfidence,
     normalizationNotes,
@@ -534,13 +552,17 @@ function createSheetsWriter(deps) {
   async function editEntryField(rowNumber, field, value) {
     const column = FIELD_COLUMNS[field];
     const range = `${entriesTabName}!${column}${rowNumber}`;
+    // date/amount are also routed through here but are pre-validated by
+    // commands.js before this is called; sanitizeSheetText is a no-op on
+    // non-string/empty values, so it's safe to apply unconditionally.
+    const safeValue = sanitizeSheetText(value);
 
     try {
       await client.spreadsheets.values.update({
         spreadsheetId,
         range,
         valueInputOption: 'USER_ENTERED',
-        requestBody: { values: [[value]] },
+        requestBody: { values: [[safeValue]] },
       });
       return { ok: true };
     } catch (err) {
@@ -609,6 +631,7 @@ module.exports = {
   getSheetIdByName,
   formatSheetTimestamp,
   entryIdExistsInColumnA,
+  sanitizeSheetText,
   FIELD_COLUMNS,
   COLUMNS,
 };

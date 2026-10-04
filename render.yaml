@@ -1,0 +1,94 @@
+# render.yaml — Render Blueprint for GroupLedger.
+#
+# Deploys two services (doc/architecture.md §2a "Interim Hosting Plan"):
+#
+#   1. groupledger          (type: web)  — the actual bot process (Baileys
+#      socket + Express /keepalive, /health). Render's free web services
+#      spin down after ~15 minutes with no inbound HTTP traffic.
+#   2. groupledger-keepalive (type: cron) — a tiny scheduled job that curls
+#      the web service's public /keepalive endpoint every 10 minutes, so it
+#      never goes 15 minutes without traffic and never spins down. This
+#      replaces/duplicates the external cron-job.org ping described in
+#      architecture.md — keeping the cron job inside the same Render
+#      Blueprint means it's provisioned automatically on deploy, with no
+#      separate third-party account required. (You can still also add a
+#      cron-job.org ping as a second, independent layer of redundancy —
+#      see README.md "Deploying to Render".)
+#
+# Note: a `cron` service on Render runs on its own schedule and exits when
+# done — it is NOT a background process living inside the web service, and
+# it does not share the web service's memory/socket. It only works here
+# because its one job is to make a single outbound HTTP request against
+# the web service's public URL, which is all that's needed to reset
+# Render's inactivity timer.
+#
+# Deploy: push this repo to a Git provider, then in the Render dashboard
+# choose "New +" -> "Blueprint" and point it at the repo. Render will
+# detect this file and provision both services. Secret env vars (marked
+# `sync: false` below) are prompted for during that first setup — fill
+# them in from your own .env (see .env.example for what each one means).
+
+services:
+  - type: web
+    name: groupledger
+    runtime: node
+    plan: free
+    region: oregon
+    # npm ci (not npm install) — installs exactly what's in
+    # package-lock.json and fails loudly on any lockfile/package.json
+    # mismatch, instead of silently resolving fresh transitive versions
+    # on every deploy.
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /keepalive
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3000
+      - key: WHATSAPP_GROUP_ID
+        sync: false
+      - key: GOOGLE_SERVICE_ACCOUNT_EMAIL
+        sync: false
+      - key: GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY
+        sync: false
+      - key: GOOGLE_SHEET_ID
+        sync: false
+      - key: LLM_API_KEY
+        sync: false
+      - key: BOT_ADMIN_FALLBACK_NUMBER
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: OFFLINE_ALERT_THRESHOLD_MINUTES
+        value: 10
+      - key: NORMALIZER_MODE
+        value: off
+      - key: QUEUE_ENABLED
+        value: false
+      - key: STATE_STORE
+        value: file
+
+  - type: cron
+    name: groupledger-keepalive
+    runtime: node
+    plan: free
+    region: oregon
+    # Every 10 minutes — comfortably under Render free tier's 15-minute
+    # inactivity spin-down window (doc/architecture.md §2a).
+    schedule: "*/10 * * * *"
+    buildCommand: "true"
+    # -f: fail (non-zero exit) on HTTP error status, so a failed ping is
+    # visible in this cron job's run history. --max-time caps how long a
+    # single run can hang waiting on a cold-starting service.
+    startCommand: curl -fsS --max-time 60 "$KEEPALIVE_URL"
+    envVars:
+      # The web service's public URL + /keepalive, e.g.
+      # https://groupledger.onrender.com/keepalive. Render only assigns
+      # this URL once the web service above has deployed at least once,
+      # so this is a `sync: false` prompt rather than a `fromService`
+      # reference — fill it in during Blueprint setup (or after the first
+      # deploy, from the web service's "Settings" page) and this cron job
+      # will start pinging it on its next scheduled run.
+      - key: KEEPALIVE_URL
+        sync: false

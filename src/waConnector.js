@@ -221,7 +221,15 @@ async function startWhatsApp({
       if (chatId !== configuredGroupId) continue;
 
       if (typeof onGroupMessage === 'function') {
-        onGroupMessage(sock, msg);
+        // A failure handling one message must never crash the process or
+        // block the rest of this batch — log and move on (Baileys' own
+        // EventEmitter has no idea this listener returns a promise, so an
+        // uncaught rejection here would otherwise be unhandled).
+        try {
+          await onGroupMessage(sock, msg);
+        } catch (err) {
+          console.error('onGroupMessage handler failed:', err);
+        }
       }
     }
   });
@@ -229,7 +237,11 @@ async function startWhatsApp({
   sock.ev.on('messages.reaction', async (reactions) => {
     for (const reaction of reactions) {
       if (typeof onReaction === 'function') {
-        onReaction(sock, reaction);
+        try {
+          await onReaction(sock, reaction);
+        } catch (err) {
+          console.error('onReaction handler failed:', err);
+        }
       }
     }
   });

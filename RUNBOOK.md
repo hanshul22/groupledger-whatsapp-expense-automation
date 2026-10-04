@@ -189,14 +189,23 @@ code-level) vs. an HTTP status or timeout mention that outlived
 returns:
 
 ```json
-{"queueEnabled": true, "queued": 0, "inflight": 0, "dead": 0, "oldestReadyAgeMs": null, "oldestInflightAgeMs": null}
+{"queueEnabled": true, "queued": 0, "inflight": 0, "dead": 0, "oldestReadyAgeMs": null, "oldestInflightAgeMs": null, "keepalive": {"pingCount": 42, "lastPingAt": "2026-10-04T12:30:00.000Z", "processStartedAt": "2026-10-04T08:00:00.000Z", "uptimeSeconds": 16200}}
 ```
 
 or, with the queue off:
 
 ```json
-{"queueEnabled": false}
+{"queueEnabled": false, "keepalive": {"pingCount": 42, "lastPingAt": "2026-10-04T12:30:00.000Z", "processStartedAt": "2026-10-04T08:00:00.000Z", "uptimeSeconds": 16200}}
 ```
+
+The `keepalive` block (also returned, more simply, by `GET /keepalive` itself)
+tells you whether the cron ping (Render's own `cron` service from
+`render.yaml`, or an external pinger) is actually reaching this process —
+`pingCount` increments once per ping and `lastPingAt` is the most recent
+one. If `lastPingAt` is more than ~15 minutes old while the service is
+otherwise reachable, the cron job itself is the thing to check (see
+render.yaml's `groupledger-keepalive` service and its run history in the
+Render dashboard), not the bot.
 
 Useful for wiring an external uptime monitor (e.g. the same
 cron-job.org ping already used for `/keepalive`, or a separate one

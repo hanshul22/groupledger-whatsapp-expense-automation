@@ -68,7 +68,8 @@ function notificationText(pendingEntry) {
   }
 
   lines.push(
-    `Any admin: reply APPROVE or REJECT to this message (or APPROVE ${entryId} / REJECT ${entryId}), or react ✅/❌ to it.`
+    `Any admin: reply APPROVE/okay/done or REJECT/no/cancel to this message ` +
+      `(or include the id, e.g. approve ${entryId} / reject ${entryId}), or react 👍✅/👎❌ to it.`
   );
 
   return lines.join('\n');

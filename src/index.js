@@ -26,6 +26,18 @@ const Redis = require('ioredis'); // only import site for the real Redis client 
 
 const PORT = process.env.PORT || 3000;
 
+// Loud, not fatal: WHATSAPP_GROUP_ID is intentionally allowed to start
+// empty (discovery mode — see README "On first run"), but a misspelled
+// env var name on a host like Render would otherwise deploy "successfully"
+// and silently never process a single message, with no sign of trouble
+// short of reading every incoming-chat-id log line.
+if (!process.env.WHATSAPP_GROUP_ID) {
+  console.warn(
+    'WARNING: WHATSAPP_GROUP_ID is not set. The bot will log every incoming ' +
+      'chat id and will not process any group messages until it is configured.'
+  );
+}
+
 // v1.2 — Durable Job Queue (additive). QUEUE_ENABLED defaults to false —
 // with it unset/false, `queueSetup` is `null` and no Redis client for the
 // queue is ever constructed (Rule 2 — behavior identical to today).
@@ -144,12 +156,33 @@ setInterval(() => {
   });
 }, 60 * 1000);
 
-// Minimal HTTP server. Real logic is stubbed for now; this exists so a cron
-// job (cron-job.org, per architecture.md) can ping it later to keep the
-// Render free-tier service awake.
+// Minimal HTTP server. Exists so a cron job — either Render's own `cron`
+// service defined in render.yaml, or an external pinger like cron-job.org
+// (per doc/architecture.md §2a) — can ping it periodically to keep the
+// Render free-tier web service from spinning down after 15 minutes of no
+// inbound HTTP traffic.
+//
+// `keepaliveStats` tracks ping count and the last-ping timestamp purely
+// for operator visibility (surfaced on /keepalive itself and in /health) —
+// it has no effect on request handling and is not persisted, since its
+// only purpose is "can I see, right now, that the cron is actually
+// reaching this process" rather than being a durability or metrics store.
+const processStartedAt = new Date();
+const keepaliveStats = {
+  pingCount: 0,
+  lastPingAt: null,
+};
+
 const app = express();
 app.get('/keepalive', (req, res) => {
-  res.status(200).send('OK');
+  keepaliveStats.pingCount += 1;
+  keepaliveStats.lastPingAt = new Date();
+  res.status(200).json({
+    status: 'OK',
+    pingCount: keepaliveStats.pingCount,
+    lastPingAt: keepaliveStats.lastPingAt.toISOString(),
+    uptimeSeconds: Math.round(process.uptime()),
+  });
 });
 
 // v1.2 — Part A7: "Add GET /health returning queue counts only (no
@@ -159,16 +192,23 @@ app.get('/keepalive', (req, res) => {
 // monitoring story than one that always answers, honestly, with
 // whatever's actually running.
 app.get('/health', async (req, res) => {
+  const keepalive = {
+    pingCount: keepaliveStats.pingCount,
+    lastPingAt: keepaliveStats.lastPingAt ? keepaliveStats.lastPingAt.toISOString() : null,
+    processStartedAt: processStartedAt.toISOString(),
+    uptimeSeconds: Math.round(process.uptime()),
+  };
+
   if (!jobQueue) {
-    res.status(200).json({ queueEnabled: false });
+    res.status(200).json({ queueEnabled: false, keepalive });
     return;
   }
   try {
     const counts = await jobQueue.getCounts();
-    res.status(200).json({ queueEnabled: true, ...counts });
+    res.status(200).json({ queueEnabled: true, ...counts, keepalive });
   } catch (err) {
     console.error('GET /health failed to read queue counts:', err && err.message ? err.message : String(err));
-    res.status(503).json({ queueEnabled: true, error: 'queue counts unavailable' });
+    res.status(503).json({ queueEnabled: true, error: 'queue counts unavailable', keepalive });
   }
 });
 
@@ -495,9 +535,9 @@ startWhatsApp({
     }
   },
 
-  onReaction: (sock, reaction) => {
+  onReaction: async (sock, reaction) => {
     const reactorJid = reaction.key.participant;
-    approvalEngine?.handleReaction({
+    await approvalEngine?.handleReaction({
       emoji: reaction.reaction.text,
       reactorJid,
       reactedMessageId: reaction.reaction.key.id,

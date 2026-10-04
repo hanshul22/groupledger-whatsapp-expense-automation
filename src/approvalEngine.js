@@ -30,17 +30,146 @@ const { generateUniqueEntryId } = require('./entryId');
 const { notifyAdmins } = require('./notifier');
 const { processDecision } = require('./decisionProcessor');
 
+// Word/phrase synonyms accepted in place of the literal APPROVE/REJECT
+// verbs, so an admin can respond however feels natural ("admin should be
+// able to approve a bill without typing the exact word APPROVE") rather
+// than needing to remember one exact keyword. Every entry here is
+// normalized (trimmed, collapsed whitespace, lowercased) before matching
+// — see `buildSynonymAlternation` — so phrases with internal spaces
+// ("theek hai") work the same as single words. Kept as a plain array
+// (not a Set) since each one also needs regex-escaping and
+// alternation-joining in a fixed, readable order.
+//
+// Deliberately includes common Hindi/Hinglish phrasing alongside English,
+// since the group this bot runs in mixes both.
+const APPROVE_SYNONYMS = [
+  'approve',
+  'approved',
+  'yes',
+  'yep',
+  'yeah',
+  'ok',
+  'okay',
+  'k',
+  'done',
+  'confirm',
+  'confirmed',
+  'correct',
+  'right',
+  'good',
+  'fine',
+  'haan',
+  'ha',
+  'theek hai',
+  'thik hai',
+  'sahi hai',
+  'sahi',
+];
+
+const REJECT_SYNONYMS = [
+  'reject',
+  'rejected',
+  'no',
+  'nope',
+  'nah',
+  'cancel',
+  'cancelled',
+  'canceled',
+  'wrong',
+  'incorrect',
+  'invalid',
+  'nahi',
+  'nahin',
+  'galat',
+  'galat hai',
+];
+
+/**
+ * Escape a string for literal use inside a RegExp, then collapse any
+ * internal whitespace into a `\s+` match so a multi-word synonym (e.g.
+ * "theek hai") still matches regardless of exactly how many spaces the
+ * sender typed between words.
+ *
+ * @param {string} phrase
+ * @returns {string}
+ */
+function synonymToPattern(phrase) {
+  return phrase
+    .trim()
+    .split(/\s+/)
+    .map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .join('\\s+');
+}
+
+/**
+ * Build a single non-capturing alternation group matching any synonym in
+ * `synonyms`, longest-first so a longer multi-word phrase (e.g. "theek
+ * hai") is never shadowed by a shorter prefix alternative appearing
+ * earlier in the list.
+ *
+ * @param {string[]} synonyms
+ * @returns {string} A `(?:...)` regex fragment (no anchors, no flags).
+ */
+function buildSynonymAlternation(synonyms) {
+  const sorted = [...synonyms].sort((a, b) => b.length - a.length);
+  return `(?:${sorted.map(synonymToPattern).join('|')})`;
+}
+
+const APPROVE_PATTERN = buildSynonymAlternation(APPROVE_SYNONYMS);
+const REJECT_PATTERN = buildSynonymAlternation(REJECT_SYNONYMS);
+
 // Decision-matching pattern for inbound group text messages, per
 // design.md "Entry_Id Generator and Matcher — Matching" (Requirements 3.1,
-// 3.2, 3.4, 9.2). Defined once at module scope rather than inline per call.
-const DECISION_REGEX = /^\s*(APPROVE|REJECT)\s+([A-Za-z0-9]{4,6})\s*$/i;
+// 3.2, 3.4, 9.2), extended to accept any APPROVE_SYNONYMS/REJECT_SYNONYMS
+// word/phrase in place of the literal verb. Defined once at module scope
+// rather than inline per call. Capture group 1 holds whichever synonym
+// actually matched — callers normalize it to 'APPROVE'/'REJECT' via
+// `classifyVerb` rather than branching on the raw matched text.
+const DECISION_REGEX = new RegExp(`^\\s*(${APPROVE_PATTERN}|${REJECT_PATTERN})\\s+([A-Za-z0-9]{4,6})\\s*$`, 'i');
 
 // Bare decision pattern (no Entry_Id) for a group reply that quotes the
 // Notification_Message directly — the quoted message identifies the
 // entry, so the verb alone is enough (Requirement: "admin can reply to
-// the message and just write approve"). No word-boundary risk here since
-// the entire trimmed string must match, not a substring.
-const BARE_DECISION_REGEX = /^\s*(APPROVE|REJECT)\s*$/i;
+// the message and just write approve", extended to any accepted
+// synonym). No word-boundary risk here since the entire trimmed string
+// must match, not a substring.
+const BARE_DECISION_REGEX = new RegExp(`^\\s*(${APPROVE_PATTERN}|${REJECT_PATTERN})\\s*$`, 'i');
+
+/**
+ * Classify a matched verb/synonym string as the canonical 'APPROVE' or
+ * 'REJECT' decision, by testing it against the same synonym lists used
+ * to build the regexes above.
+ *
+ * @param {string} matchedVerb - The raw text captured by DECISION_REGEX/
+ *   BARE_DECISION_REGEX's first capture group (any casing/whitespace).
+ * @returns {'APPROVE'|'REJECT'}
+ */
+function classifyVerb(matchedVerb) {
+  const normalized = matchedVerb.trim().toLowerCase().replace(/\s+/g, ' ');
+  const isApprove = APPROVE_SYNONYMS.some((syn) => syn.replace(/\s+/g, ' ') === normalized);
+  return isApprove ? 'APPROVE' : 'REJECT';
+}
+
+// Reaction emoji accepted in place of the original ✅/❌, per the same
+// "don't require one exact symbol" extension as the text synonyms above.
+// 👍/👌/🙆 read as approval; 👎/🙅 read as rejection, alongside the
+// original ✅/❌.
+const APPROVE_EMOJI = new Set(['✅', '👍', '👌', '🙆']);
+const REJECT_EMOJI = new Set(['❌', '👎', '🙅']);
+
+/**
+ * Classify a reaction emoji as an APPROVE/REJECT decision, or `null` if
+ * it's not one of the recognized emoji at all (Requirement 4.3 —
+ * disregard any other reaction).
+ *
+ * @param {string} emoji
+ * @returns {'APPROVE'|'REJECT'|null}
+ */
+function classifyReactionEmoji(emoji) {
+  if (APPROVE_EMOJI.has(emoji)) return 'APPROVE';
+  if (REJECT_EMOJI.has(emoji)) return 'REJECT';
+  return null;
+}
 
 /**
  * Factory for the Approval Engine.
@@ -224,7 +353,7 @@ function createApprovalEngine(deps) {
           onResolution,
           auditLogPath,
           pendingEntry: quotedEntry,
-          verb: bareMatch[1].toUpperCase(),
+          verb: classifyVerb(bareMatch[1]),
           responderJid: senderJid,
           responderName,
         });
@@ -237,7 +366,7 @@ function createApprovalEngine(deps) {
       return false; // not handled — fall through to expense parsing (Req 3.4)
     }
 
-    const verb = match[1].toUpperCase();
+    const verb = classifyVerb(match[1]);
     const entryId = match[2].toLowerCase(); // case-insensitive matching, Req 9.2
 
     const pendingEntry = pendingStore.getById(entryId);
@@ -282,7 +411,8 @@ function createApprovalEngine(deps) {
    * @returns {Promise<void>}
    */
   async function handleReaction({ emoji, reactorJid, reactedMessageId, responderName }) {
-    if (emoji !== '✅' && emoji !== '❌') {
+    const verb = classifyReactionEmoji(emoji);
+    if (!verb) {
       return; // disregarded — Req 4.3
     }
 
@@ -291,8 +421,6 @@ function createApprovalEngine(deps) {
     if (!pendingEntry || pendingEntry.status !== 'pending') {
       return; // disregarded — Req 4.3
     }
-
-    const verb = emoji === '✅' ? 'APPROVE' : 'REJECT';
 
     await processDecision({
       sock,
@@ -319,4 +447,10 @@ function createApprovalEngine(deps) {
 
 module.exports = {
   createApprovalEngine,
+  APPROVE_SYNONYMS,
+  REJECT_SYNONYMS,
+  APPROVE_EMOJI,
+  REJECT_EMOJI,
+  classifyVerb,
+  classifyReactionEmoji,
 };

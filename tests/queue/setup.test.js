@@ -37,6 +37,7 @@ function makeSpyRedisClientCtor() {
       const chain = { exec: async () => ops.map(() => [null, null]) };
       return chain;
     }
+    on() {} // real ioredis is an EventEmitter — setup.js attaches an 'error' listener
   }
   return { SpyRedisClient, getConstructedCount: () => constructedCount };
 }

@@ -1267,13 +1267,18 @@ describe('createApprovalEngine — reaction matching', () => {
     }
   });
 
-  // Feature: approval-engine, Property 7: Reactions are matched only when they are ✅/❌ on a tracked notification for an unresolved entry
-  test('Property 7b: a reaction with any emoji other than ✅/❌ on the tracked notification message is disregarded', async () => {
+  // Feature: approval-engine, Property 7: Reactions are matched only when
+  // they're a recognized approve/reject emoji (✅/👍/👌/🙆 or ❌/👎/🙅) on a
+  // tracked notification for an unresolved entry. 👍/👎 moved out of this
+  // "disqualifying" generator and into the recognized sets below, per the
+  // "accept more than one exact word/emoji" extension — this property now
+  // only covers emoji that are still genuinely unrecognized either way.
+  test('Property 7b: a reaction with any unrecognized emoji on the tracked notification message is disregarded', async () => {
     await fc.assert(
       fc.asyncProperty(
         parsedEntryArb,
         submissionMetaArb,
-        fc.constantFrom('👍', '👎', '😀', '🎉', '❓', '🙏'),
+        fc.constantFrom('😀', '🎉', '❓', '🙏'),
         async (parsedEntry, submissionMeta, emoji) => {
           const tmpDir = makeTmpDir();
           try {
@@ -1412,5 +1417,320 @@ describe('createApprovalEngine — reaction matching', () => {
       ),
       { numRuns: 30 },
     );
+  });
+
+  // Covers the extended emoji synonym sets (APPROVE_EMOJI/REJECT_EMOJI in
+  // src/approvalEngine.js) — a 👍/👌/🙆 reaction resolves exactly like ✅,
+  // and 👎/🙅 resolves exactly like ❌.
+  test('Property 7d: 👍/👌/🙆 reactions approve, and 👎/🙅 reactions reject, same as ✅/❌', async () => {
+    await fc.assert(
+      fc.asyncProperty(
+        parsedEntryArb,
+        submissionMetaArb,
+        fc.constantFrom('✅', '👍', '👌', '🙆'),
+        async (parsedEntry, submissionMeta, emoji) => {
+          const tmpDir = makeTmpDir();
+          try {
+            const storePath = path.join(tmpDir, 'pending-store.json');
+            const auditLogPath = path.join(tmpDir, 'audit.log');
+
+            let adminMode = false;
+            const isGroupAdmin = async () => adminMode;
+            const onResolutionCalls = [];
+            const onResolution = async (resolution) => {
+              onResolutionCalls.push(resolution);
+            };
+
+            const engine = createApprovalEngine({
+              sock: {},
+              groupId: 'g',
+              isGroupAdmin,
+              sendMessage: async () => ({ key: { id: 'notif-msg-approve-emoji' } }),
+              onResolution,
+              storePath,
+              auditLogPath,
+            });
+
+            await engine.init();
+
+            adminMode = false;
+            await engine.submitEntry(parsedEntry, submissionMeta);
+
+            adminMode = true;
+            await engine.handleReaction({
+              emoji,
+              reactorJid: 'admin1',
+              reactedMessageId: 'notif-msg-approve-emoji',
+            });
+
+            assert.strictEqual(onResolutionCalls.length, 1);
+            assert.strictEqual(onResolutionCalls[0].status, 'approved');
+          } finally {
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+          }
+        },
+      ),
+      { numRuns: 20 },
+    );
+
+    await fc.assert(
+      fc.asyncProperty(
+        parsedEntryArb,
+        submissionMetaArb,
+        fc.constantFrom('❌', '👎', '🙅'),
+        async (parsedEntry, submissionMeta, emoji) => {
+          const tmpDir = makeTmpDir();
+          try {
+            const storePath = path.join(tmpDir, 'pending-store.json');
+            const auditLogPath = path.join(tmpDir, 'audit.log');
+
+            let adminMode = false;
+            const isGroupAdmin = async () => adminMode;
+            const onResolutionCalls = [];
+            const onResolution = async (resolution) => {
+              onResolutionCalls.push(resolution);
+            };
+
+            const engine = createApprovalEngine({
+              sock: {},
+              groupId: 'g',
+              isGroupAdmin,
+              sendMessage: async () => ({ key: { id: 'notif-msg-reject-emoji' } }),
+              onResolution,
+              storePath,
+              auditLogPath,
+            });
+
+            await engine.init();
+
+            adminMode = false;
+            await engine.submitEntry(parsedEntry, submissionMeta);
+
+            adminMode = true;
+            await engine.handleReaction({
+              emoji,
+              reactorJid: 'admin1',
+              reactedMessageId: 'notif-msg-reject-emoji',
+            });
+
+            assert.strictEqual(onResolutionCalls.length, 1);
+            assert.strictEqual(onResolutionCalls[0].status, 'rejected');
+          } finally {
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+          }
+        },
+      ),
+      { numRuns: 20 },
+    );
+  });
+});
+
+describe('createApprovalEngine — text decision synonyms (approve/reject word variants)', () => {
+  // Covers the extended word/phrase synonym sets (APPROVE_SYNONYMS/
+  // REJECT_SYNONYMS in src/approvalEngine.js) — an admin can respond with
+  // a natural word like "done"/"ok"/"theek hai" instead of the literal
+  // "APPROVE", both as a bare quoted-reply and as an explicit "<word> <id>".
+  test('a bare reply using any approve synonym, quoting the Notification_Message, approves the entry', async () => {
+    const { APPROVE_SYNONYMS } = require('../src/approvalEngine');
+    const tmpDir = makeTmpDir();
+    try {
+      const storePath = path.join(tmpDir, 'pending-store.json');
+      const auditLogPath = path.join(tmpDir, 'audit.log');
+
+      for (const synonym of APPROVE_SYNONYMS) {
+        let adminMode = false;
+        const isGroupAdmin = async () => adminMode;
+        const onResolutionCalls = [];
+        const onResolution = async (resolution) => {
+          onResolutionCalls.push(resolution);
+        };
+
+        const engine = createApprovalEngine({
+          sock: {},
+          groupId: 'g',
+          isGroupAdmin,
+          sendMessage: async () => ({ key: { id: `notif-${synonym.replace(/\s+/g, '-')}` } }),
+          onResolution,
+          storePath: path.join(tmpDir, `store-${synonym.replace(/\s+/g, '-')}.json`),
+          auditLogPath,
+        });
+
+        await engine.init();
+
+        adminMode = false;
+        await engine.submitEntry(
+          { amount: 100, given_to: 'X', date: '2024-06-15', paid_by: 'Y', raw_message: 'z' },
+          { submittedBy: 'Momo', submittedByJid: 'momo@s.whatsapp.net', submittedAt: new Date() },
+        );
+
+        adminMode = true;
+        const result = await engine.handleTextMessage({
+          text: synonym,
+          senderJid: 'admin1@s.whatsapp.net',
+          quotedMessageId: `notif-${synonym.replace(/\s+/g, '-')}`,
+        });
+
+        assert.strictEqual(result, true, `expected synonym ${JSON.stringify(synonym)} to be handled`);
+        assert.strictEqual(
+          onResolutionCalls.length,
+          1,
+          `expected approve synonym ${JSON.stringify(synonym)} to resolve the entry exactly once`,
+        );
+        assert.strictEqual(onResolutionCalls[0].status, 'approved');
+      }
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test('a bare reply using any reject synonym, quoting the Notification_Message, rejects the entry', async () => {
+    const { REJECT_SYNONYMS } = require('../src/approvalEngine');
+    const tmpDir = makeTmpDir();
+    try {
+      const storePath = path.join(tmpDir, 'pending-store.json');
+      const auditLogPath = path.join(tmpDir, 'audit.log');
+
+      for (const synonym of REJECT_SYNONYMS) {
+        let adminMode = false;
+        const isGroupAdmin = async () => adminMode;
+        const onResolutionCalls = [];
+        const onResolution = async (resolution) => {
+          onResolutionCalls.push(resolution);
+        };
+
+        const engine = createApprovalEngine({
+          sock: {},
+          groupId: 'g',
+          isGroupAdmin,
+          sendMessage: async () => ({ key: { id: `notif-${synonym.replace(/\s+/g, '-')}` } }),
+          onResolution,
+          storePath: path.join(tmpDir, `store-${synonym.replace(/\s+/g, '-')}.json`),
+          auditLogPath,
+        });
+
+        await engine.init();
+
+        adminMode = false;
+        await engine.submitEntry(
+          { amount: 100, given_to: 'X', date: '2024-06-15', paid_by: 'Y', raw_message: 'z' },
+          { submittedBy: 'Momo', submittedByJid: 'momo@s.whatsapp.net', submittedAt: new Date() },
+        );
+
+        adminMode = true;
+        const result = await engine.handleTextMessage({
+          text: synonym,
+          senderJid: 'admin1@s.whatsapp.net',
+          quotedMessageId: `notif-${synonym.replace(/\s+/g, '-')}`,
+        });
+
+        assert.strictEqual(result, true, `expected synonym ${JSON.stringify(synonym)} to be handled`);
+        assert.strictEqual(
+          onResolutionCalls.length,
+          1,
+          `expected reject synonym ${JSON.stringify(synonym)} to resolve the entry exactly once`,
+        );
+        assert.strictEqual(onResolutionCalls[0].status, 'rejected');
+      }
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test('explicit "<synonym> <id>" form works for a representative sample of approve/reject synonyms', async () => {
+    const tmpDir = makeTmpDir();
+    try {
+      const storePath = path.join(tmpDir, 'pending-store.json');
+      const auditLogPath = path.join(tmpDir, 'audit.log');
+
+      const cases = [
+        { text: (id) => `done ${id}`, expectedStatus: 'approved' },
+        { text: (id) => `OK ${id}`, expectedStatus: 'approved' },
+        { text: (id) => `theek hai ${id}`, expectedStatus: 'approved' },
+        { text: (id) => `no ${id}`, expectedStatus: 'rejected' },
+        { text: (id) => `cancel ${id}`, expectedStatus: 'rejected' },
+        { text: (id) => `galat hai ${id}`, expectedStatus: 'rejected' },
+      ];
+
+      for (const { text: buildText, expectedStatus } of cases) {
+        let adminMode = false;
+        const isGroupAdmin = async () => adminMode;
+        const onResolutionCalls = [];
+        const onResolution = async (resolution) => {
+          onResolutionCalls.push(resolution);
+        };
+
+        const engine = createApprovalEngine({
+          sock: { groupMetadata: async () => ({ participants: [] }) },
+          groupId: 'g',
+          isGroupAdmin,
+          sendMessage: async () => ({ key: { id: 'x' } }),
+          onResolution,
+          storePath,
+          auditLogPath,
+        });
+
+        await engine.init();
+
+        adminMode = false;
+        await engine.submitEntry(
+          { amount: 100, given_to: 'X', date: '2024-06-15', paid_by: 'Y', raw_message: 'z' },
+          { submittedBy: 'Momo', submittedByJid: 'momo@s.whatsapp.net', submittedAt: new Date() },
+        );
+
+        const freshStore = createPendingStore({ storePath, auditLogPath });
+        await freshStore.init();
+        const [entryId] = freshStore.getAllIds();
+        assert.ok(entryId);
+
+        adminMode = true;
+        const result = await engine.handleTextMessage({
+          text: buildText(entryId),
+          senderJid: 'admin1@s.whatsapp.net',
+        });
+
+        assert.strictEqual(result, true, `expected ${JSON.stringify(buildText(entryId))} to be handled`);
+        assert.strictEqual(onResolutionCalls.length, 1);
+        assert.strictEqual(onResolutionCalls[0].status, expectedStatus);
+      }
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test('ordinary expense-like text containing a synonym word as a substring is NOT treated as a decision (e.g. "done shopping for flowers")', async () => {
+    const tmpDir = makeTmpDir();
+    try {
+      const storePath = path.join(tmpDir, 'pending-store.json');
+      const auditLogPath = path.join(tmpDir, 'audit.log');
+
+      const engine = createApprovalEngine({
+        sock: {},
+        groupId: 'g',
+        isGroupAdmin: async () => true,
+        sendMessage: async () => ({ key: { id: 'x' } }),
+        onResolution: async () => {},
+        storePath,
+        auditLogPath,
+      });
+
+      await engine.init();
+
+      const nonDecisionTexts = [
+        'done shopping for flowers today', // "done" present but not the whole message
+        '500 paid to caterer, all good', // "good" is a synonym word but message is longer
+        'ok i will send the payment later', // "ok" present but not alone
+      ];
+
+      for (const text of nonDecisionTexts) {
+        const result = await engine.handleTextMessage({ text, senderJid: 'admin1@s.whatsapp.net' });
+        assert.strictEqual(
+          result,
+          false,
+          `expected ordinary text containing a synonym word to NOT be treated as a decision: ${JSON.stringify(text)}`,
+        );
+      }
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 });

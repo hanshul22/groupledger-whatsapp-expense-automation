@@ -17,6 +17,7 @@ const {
   generateSheetRowId,
   appendRow,
   formatSheetTimestamp,
+  sanitizeSheetText,
 } = require('../src/sheetsWriter');
 
 // ---------------------------------------------------------------------------
@@ -129,19 +130,23 @@ test('Property 1: Approved/auto-approved Resolutions always produce exactly one 
         } else {
           assert.ok(typeof entryId === 'string' && entryId.startsWith('auto-'));
         }
+        // Free-text columns are run through sanitizeSheetText (formula-
+        // injection guard — see sheetsWriter.js) before landing in the
+        // row, so arbitrary generated strings starting with =/+/-/@
+        // come out with a leading single-quote rather than verbatim.
         assert.strictEqual(date, entry.date);
-        assert.strictEqual(description, entry.notes || '');
+        assert.strictEqual(description, sanitizeSheetText(entry.notes || ''));
         assert.strictEqual(amount, entry.amount);
-        assert.strictEqual(givenTo, entry.given_to);
-        assert.strictEqual(subBy, submittedBy);
-        assert.strictEqual(party, entry.party || '');
+        assert.strictEqual(givenTo, sanitizeSheetText(entry.given_to));
+        assert.strictEqual(subBy, sanitizeSheetText(submittedBy));
+        assert.strictEqual(party, sanitizeSheetText(entry.party || ''));
         assert.strictEqual(rowStatus, status);
-        assert.strictEqual(actorBy, approvedBy);
+        assert.strictEqual(actorBy, sanitizeSheetText(approvedBy));
         // The sheet column renders a human-readable, timezone-formatted
         // string rather than the raw ISO timestamp — see
         // sheetsWriter.js's formatSheetTimestamp.
         assert.strictEqual(actorAt, formatSheetTimestamp(resolution.approved_at));
-        assert.strictEqual(rawMsg, entry.raw_message);
+        assert.strictEqual(rawMsg, sanitizeSheetText(entry.raw_message));
         // v1.1 — blank when the resolution carries no normalizerMeta.
         assert.strictEqual(normalizedBy, '');
         assert.strictEqual(llmConfidence, '');
@@ -194,7 +199,7 @@ test('Property 2: Rejected Resolutions always produce exactly one Rejected-tab a
 
         assert.strictEqual(rowEntryId, entryId);
         assert.strictEqual(rowStatus, 'rejected');
-        assert.strictEqual(actorBy, rejectedBy);
+        assert.strictEqual(actorBy, sanitizeSheetText(rejectedBy));
         assert.strictEqual(actorAt, formatSheetTimestamp(resolution.rejected_at));
       }
     ),
@@ -408,6 +413,17 @@ test('mapToRow: description falls back to raw_message-independent blank string w
   const [, , description, , , , party] = row;
   assert.strictEqual(description, '');
   assert.strictEqual(party, '');
+});
+
+test('sanitizeSheetText: prefixes =/+/-/@ -led strings with a single quote, leaves everything else untouched', () => {
+  assert.strictEqual(sanitizeSheetText('=HYPERLINK("http://evil.com")'), '\'=HYPERLINK("http://evil.com")');
+  assert.strictEqual(sanitizeSheetText('+1 234'), "'+1 234");
+  assert.strictEqual(sanitizeSheetText('-500'), "'-500");
+  assert.strictEqual(sanitizeSheetText('@mention'), "'@mention");
+  assert.strictEqual(sanitizeSheetText('normal text'), 'normal text');
+  assert.strictEqual(sanitizeSheetText(''), '');
+  assert.strictEqual(sanitizeSheetText(undefined), undefined);
+  assert.strictEqual(sanitizeSheetText(500), 500); // non-string (amount) passes through untouched
 });
 
 test('Requirement 5.3 (structural): sheetsWriter.js has no Approval-Engine-owned or Responder-owned concerns', () => {

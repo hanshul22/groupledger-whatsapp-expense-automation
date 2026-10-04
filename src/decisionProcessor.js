@@ -42,7 +42,10 @@ function formatResponderIdentity(responderName, responderJid) {
   if (responderName && responderName.trim()) {
     return responderName.trim();
   }
-  return responderJid.split('@')[0];
+  // responderJid can be undefined for some reaction event shapes (e.g.
+  // Baileys occasionally omits reaction.key.participant) — fall back to
+  // a visible placeholder instead of throwing on .split.
+  return responderJid ? responderJid.split('@')[0] : 'unknown';
 }
 
 /**

@@ -16,6 +16,7 @@ const fc = require('fast-check');
 const {
   createSheetsWriter,
   extractRowNumber,
+  sanitizeSheetText,
   FIELD_COLUMNS,
 } = require('../src/sheetsWriter');
 
@@ -293,7 +294,13 @@ test('Property 7 (sheetsWriter level): editEntryField addresses exactly the targ
         const req = calls.valuesUpdate[0];
         assert.strictEqual(req.range, `Entries!${FIELD_COLUMNS[field]}${rowNumber}`);
         assert.strictEqual(req.valueInputOption, 'USER_ENTERED');
-        assert.deepStrictEqual(req.requestBody.values, [[value]]);
+        // editEntryField runs the value through sanitizeSheetText first
+        // (formula-injection guard — a leading =/+/-/@ gets a leading
+        // single-quote so Sheets renders it as literal text, not a
+        // formula); the written value should match that, not the raw
+        // generated string, whenever the generator happens to produce
+        // one of those prefixes.
+        assert.deepStrictEqual(req.requestBody.values, [[sanitizeSheetText(value)]]);
 
         assert.strictEqual(result.ok, !shouldFail);
       }

@@ -122,6 +122,12 @@ function createAuthStateFactory({ redisUrl, authDir = AUTH_DIR, RedisClientCtor 
   }
 
   const redisClient = new RedisClientCtor(redisUrl);
+  // ioredis emits 'error' on connection problems (e.g. the host going
+  // down mid-session); with no listener attached, Node treats an
+  // unhandled EventEmitter 'error' event as fatal and crashes the whole
+  // process. Logging it here is enough — ioredis itself already retries
+  // the connection internally.
+  redisClient.on('error', (err) => console.error('Redis auth-state client error:', err));
   return () => createRedisAuthState(redisClient);
 }
 
