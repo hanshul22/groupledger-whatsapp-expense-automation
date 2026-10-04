@@ -214,6 +214,11 @@ function createApprovalEngine(deps) {
     storePath = './data/pending-store.json',
     auditLogPath = './data/audit.log',
     pendingStore: injectedPendingStore,
+    // TEMP DIAGNOSTIC — see index.js's GET /debug-logs route. Defaults to
+    // a no-op so every existing caller/test is unaffected. Remove this
+    // param and its three call sites in handleReaction once the
+    // "reaction isn't resolving" issue is confirmed fixed.
+    onDebugLog = () => {},
   } = deps;
 
   // Module-scoped Pending_Store instance for this engine instance, per
@@ -413,12 +418,21 @@ function createApprovalEngine(deps) {
   async function handleReaction({ emoji, reactorJid, reactedMessageId, responderName }) {
     const verb = classifyReactionEmoji(emoji);
     if (!verb) {
+      // TEMP DIAGNOSTIC — see index.js's GET /debug-logs route.
+      onDebugLog('handleReaction: emoji not recognized', { emoji });
       return; // disregarded — Req 4.3
     }
 
     const pendingEntry = pendingStore.findByNotificationMessageId(reactedMessageId);
 
-    if (!pendingEntry || pendingEntry.status !== 'pending') {
+    if (!pendingEntry) {
+      // TEMP DIAGNOSTIC — see index.js's GET /debug-logs route.
+      onDebugLog('handleReaction: no pending entry found for reactedMessageId', { reactedMessageId });
+      return; // disregarded — Req 4.3
+    }
+    if (pendingEntry.status !== 'pending') {
+      // TEMP DIAGNOSTIC — see index.js's GET /debug-logs route.
+      onDebugLog('handleReaction: entry found but not pending', { status: pendingEntry.status, entryId: pendingEntry.entryId });
       return; // disregarded — Req 4.3
     }
 

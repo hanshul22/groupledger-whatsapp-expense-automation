@@ -186,6 +186,27 @@ app.get('/keepalive', (req, res) => {
   });
 });
 
+// TEMP DIAGNOSTIC — in-memory ring buffer for debugging the reaction-
+// matching flow without depending on Render's dashboard log viewer
+// (which has been intermittently stale/unreliable). Capped at
+// DEBUG_LOG_MAX_LINES so it can never grow unbounded; never written to
+// disk (Render's free-tier filesystem is ephemeral anyway, and this is
+// throwaway diagnostic data, not an audit trail — see auditLog.js for
+// the real one). Remove this block, pushDebugLog's call sites, and the
+// /debug-logs route below once the reaction issue is confirmed fixed.
+const DEBUG_LOG_MAX_LINES = 200;
+const debugLogBuffer = [];
+function pushDebugLog(message, data) {
+  debugLogBuffer.push({ at: new Date().toISOString(), message, data });
+  if (debugLogBuffer.length > DEBUG_LOG_MAX_LINES) {
+    debugLogBuffer.shift();
+  }
+  console.log(`DEBUG ${message}:`, JSON.stringify(data));
+}
+app.get('/debug-logs', (req, res) => {
+  res.status(200).json({ count: debugLogBuffer.length, logs: debugLogBuffer });
+});
+
 // Render's web log viewer prefixes every line with a timestamp, which
 // breaks the grid alignment of waConnector.js's terminal-art QR code and
 // makes it unscannable even though it prints correctly. This route is a
@@ -480,6 +501,7 @@ startWhatsApp({
         isGroupAdmin,
         sendMessage,
         pendingStore: redisPendingStore, // v1.2 — undefined preserves the default file store (Rule 2)
+        onDebugLog: pushDebugLog, // TEMP DIAGNOSTIC — see GET /debug-logs
         onResolution: jobQueue
           ? async (resolution) => {
               // v1.2 — QUEUE_ENABLED=true: hand off to the durable
@@ -572,6 +594,17 @@ startWhatsApp({
 
   onReaction: async (sock, reaction) => {
     const reactorJid = reaction.key.participant;
+    // TEMP DIAGNOSTIC — remove once the "reaction isn't resolving" issue
+    // is confirmed fixed. Logs exactly what Baileys handed us so we can
+    // tell whether the event is arriving at all, and with what shape.
+    // See GET /debug-logs (defined earlier in this file) to read these
+    // back without relying on Render's dashboard log viewer.
+    pushDebugLog('reaction received', {
+      emoji: reaction?.reaction?.text,
+      reactorJid,
+      reactedMessageId: reaction?.reaction?.key?.id,
+      hasApprovalEngine: Boolean(approvalEngine),
+    });
     await approvalEngine?.handleReaction({
       emoji: reaction.reaction.text,
       reactorJid,
