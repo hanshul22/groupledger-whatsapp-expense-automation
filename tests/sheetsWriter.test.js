@@ -14,6 +14,8 @@ const fc = require('fast-check');
 const {
   createSheetsWriter,
   mapToRow,
+  mapToEntriesRow,
+  ENTRIES_COLUMNS,
   generateSheetRowId,
   appendRow,
   formatSheetTimestamp,
@@ -103,27 +105,12 @@ test('Property 1: Approved/auto-approved Resolutions always produce exactly one 
         assert.strictEqual(calls[0].range, 'Entries!A:A');
 
         const row = calls[0].requestBody.values[0];
-        // v1.1 — 11 original columns (A-K) + 3 append-only normalizer
-        // columns (L-N, doc/trd.md §8.6), blank here since this
-        // resolution carries no normalizerMeta.
-        assert.strictEqual(row.length, 14);
+        // The Entries tab has its own 9-column layout (ENTRIES_COLUMNS in
+        // sheetsWriter.js, matching the live sheet's header row) — NOT
+        // the 14-column order the Rejected tab still uses.
+        assert.strictEqual(row.length, 9);
 
-        const [
-          entryId,
-          date,
-          description,
-          amount,
-          givenTo,
-          subBy,
-          party,
-          rowStatus,
-          actorBy,
-          actorAt,
-          rawMsg,
-          normalizedBy,
-          llmConfidence,
-          normalizationNotes,
-        ] = row;
+        const [entryId, amount, givenTo, subBy, party, rowStatus, actorBy, dateCol, descriptionCol] = row;
 
         if (status === 'approved') {
           assert.strictEqual(entryId, 'ab12c');
@@ -134,23 +121,18 @@ test('Property 1: Approved/auto-approved Resolutions always produce exactly one 
         // injection guard — see sheetsWriter.js) before landing in the
         // row, so arbitrary generated strings starting with =/+/-/@
         // come out with a leading single-quote rather than verbatim.
-        assert.strictEqual(date, entry.date);
-        assert.strictEqual(description, sanitizeSheetText(entry.notes || ''));
         assert.strictEqual(amount, entry.amount);
         assert.strictEqual(givenTo, sanitizeSheetText(entry.given_to));
         assert.strictEqual(subBy, sanitizeSheetText(submittedBy));
         assert.strictEqual(party, sanitizeSheetText(entry.party || ''));
         assert.strictEqual(rowStatus, status);
         assert.strictEqual(actorBy, sanitizeSheetText(approvedBy));
-        // The sheet column renders a human-readable, timezone-formatted
-        // string rather than the raw ISO timestamp — see
-        // sheetsWriter.js's formatSheetTimestamp.
-        assert.strictEqual(actorAt, formatSheetTimestamp(resolution.approved_at));
-        assert.strictEqual(rawMsg, sanitizeSheetText(entry.raw_message));
-        // v1.1 — blank when the resolution carries no normalizerMeta.
-        assert.strictEqual(normalizedBy, '');
-        assert.strictEqual(llmConfidence, '');
-        assert.strictEqual(normalizationNotes, '');
+        // The sheet's "date" column holds the human-readable,
+        // timezone-formatted approval timestamp (see sheetsWriter.js's
+        // formatSheetTimestamp), and "description" holds the original
+        // message — same as the rows already in the live sheet.
+        assert.strictEqual(dateCol, formatSheetTimestamp(resolution.approved_at));
+        assert.strictEqual(descriptionCol, sanitizeSheetText(entry.raw_message));
       }
     ),
     { numRuns: 100 }
@@ -398,6 +380,34 @@ test('Requirement 3.3: Rejected tab missing — logs and throws rather than cras
   } finally {
     console.error = originalConsoleError;
   }
+});
+
+// Locks the Entries row to the live sheet's header row, using the exact
+// resolution shape behind the misaligned row that prompted this layout.
+test('mapToEntriesRow: values land under the Entries header order (entry_id, amount, given_to, submitted_by, party, status, approved_by, date, description)', () => {
+  const row = mapToEntriesRow({
+    status: 'auto_approved',
+    entryId: '6df430a893bad538',
+    entry: fixedResolutionEntry({ amount: 300, given_to: 'Hanshul', raw_message: 'Hanshul 300' }),
+    submittedBy: 'Anuj Goyal',
+    approved_by: 'Anuj Goyal',
+    approved_at: '2026-10-20T13:18:00.000Z',
+  });
+
+  assert.deepStrictEqual(ENTRIES_COLUMNS, [
+    'entry_id', 'amount', 'given_to', 'submitted_by', 'party', 'status', 'approved_by', 'date', 'description',
+  ]);
+  assert.deepStrictEqual(row, [
+    '6df430a893bad538',
+    300,
+    'Hanshul',
+    'Anuj Goyal',
+    '',
+    'auto_approved',
+    'Anuj Goyal',
+    formatSheetTimestamp('2026-10-20T13:18:00.000Z'),
+    'Hanshul 300',
+  ]);
 });
 
 test('mapToRow: description falls back to raw_message-independent blank string when notes is absent', () => {

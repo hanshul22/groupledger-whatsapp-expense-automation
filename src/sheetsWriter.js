@@ -50,20 +50,40 @@ const SHEET_ROW_ID_ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789';
 const SHEET_ROW_ID_LENGTH = 5;
 const SHEET_ROW_ID_PREFIX = 'auto-';
 
-// Fixed field-name -> column-letter map for `/edit`, per COLUMNS' index
-// order above (entry_id=A, date=B, description=C, amount=D, given_to=E,
-// submitted_by=F, party=G, status=H, approved_by=I, approved_at=J,
-// raw_message=K). Deliberately excludes system/audit-trail columns
-// (entry_id, submitted_by, status, approved_by, approved_at, raw_message)
-// per .kiro/specs/responder-commands/requirements.md's Editable_Field
+// The Entries tab's real header row (A1:I1), in order. The sheet was
+// reshaped by hand away from COLUMNS above, so Entries rows are built in
+// THIS order (see mapToEntriesRow) while the Rejected tab still uses
+// COLUMNS as-is. Note the two renamed columns: "date" holds the approval
+// timestamp (COLUMNS' approved_at) and "description" holds the original
+// message (COLUMNS' raw_message), matching the rows already in the sheet.
+// To add a column, add its header to the sheet AND to this list and to
+// mapToEntriesRow below.
+const ENTRIES_COLUMNS = [
+  'entry_id',
+  'amount',
+  'given_to',
+  'submitted_by',
+  'party',
+  'status',
+  'approved_by',
+  'date',
+  'description',
+];
+
+// Fixed field-name -> column-letter map for `/edit`, which only ever
+// edits the Entries tab, so the letters follow ENTRIES_COLUMNS above
+// (entry_id=A, amount=B, given_to=C, submitted_by=D, party=E, status=F,
+// approved_by=G, date=H, description=I). Deliberately excludes system/
+// audit-trail columns (entry_id, submitted_by, status, approved_by) per
+// .kiro/specs/responder-commands/requirements.md's Editable_Field
 // definition — Phase 6 (`commands.js`) is the caller that enforces this
 // restriction, but the map itself only ever knows about editable fields.
 const FIELD_COLUMNS = {
-  date: 'B',
-  description: 'C',
-  amount: 'D',
-  given_to: 'E',
-  party: 'G',
+  amount: 'B',
+  given_to: 'C',
+  party: 'E',
+  date: 'H',
+  description: 'I',
 };
 
 /**
@@ -158,6 +178,30 @@ function mapToRow(resolution) {
     normalizedBy,
     llmConfidence,
     normalizationNotes,
+  ];
+}
+
+/**
+ * Build an Entries-tab row in ENTRIES_COLUMNS order. Reuses mapToRow for
+ * every value (so formula-injection sanitizing, id generation and
+ * timestamp formatting stay in one place) and just picks/reorders them.
+ *
+ * @param {object} resolution
+ * @returns {(string|number)[]} A 9-element row array in ENTRIES_COLUMNS order.
+ */
+function mapToEntriesRow(resolution) {
+  const base = mapToRow(resolution);
+  const v = Object.fromEntries(COLUMNS.map((name, i) => [name, base[i]]));
+  return [
+    v.entry_id,
+    v.amount,
+    v.given_to,
+    v.submitted_by,
+    v.party,
+    v.status,
+    v.approved_by,
+    v.approved_at,
+    v.raw_message,
   ];
 }
 
@@ -443,8 +487,10 @@ function createSheetsWriter(deps) {
    * @returns {Promise<void>}
    */
   async function writeResolution(resolution) {
-    const row = mapToRow(resolution);
     const tabName = resolution.status === 'rejected' ? rejectedTabName : entriesTabName;
+    // Entries and Rejected have different header layouts (see
+    // ENTRIES_COLUMNS), so each tab gets its own row shape.
+    const row = tabName === entriesTabName ? mapToEntriesRow(resolution) : mapToRow(resolution);
 
     const result = await appendRow(client, spreadsheetId, tabName, row);
 
@@ -623,6 +669,7 @@ function createSheetsWriter(deps) {
 module.exports = {
   createSheetsWriter,
   mapToRow,
+  mapToEntriesRow,
   generateSheetRowId,
   appendRow,
   buildSheetsClient,
@@ -634,4 +681,5 @@ module.exports = {
   sanitizeSheetText,
   FIELD_COLUMNS,
   COLUMNS,
+  ENTRIES_COLUMNS,
 };
